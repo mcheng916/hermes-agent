@@ -1019,6 +1019,8 @@ _SCOPED_KEY = "_left_core_scoped"  # config.yaml: rows whose toolset scope this 
 # config.yaml: rows this home has had installed (by the migration, or by the user before it ran).
 # Never written before the plugin dir exists, so a home whose install never succeeded keeps retrying.
 _INSTALLED_KEY = "_left_core_installed"
+# ``hermes_cli.default_plugins``' marker for the same one-time install of a ``default: true`` plugin.
+_DEFAULT_INSTALLED_KEY = "_default_plugins_installed"
 
 
 # config.yaml: rows whose ``left_at`` config step found the core feature in use in this home.
@@ -1170,12 +1172,19 @@ def _pending(home: Path, *, say: Callable[[str], None], process_env: bool = Fals
     from hermes_cli.memory_provider_migration import catalog_source
     out = []
     for feature in LEFT_CORE:
-        if _marked(_read_config(home), _INSTALLED_KEY, feature):
-            continue
+        config = _read_config(home)
+        if _marked(config, _INSTALLED_KEY, feature) or any(f.plugin == feature.plugin for f in out):
+            continue  # one install per plugin: both WeCom rows name the same one
         if not feature_in_use(feature, home, process_env=process_env):
             continue
+        # One automatic install per plugin and home, by either installer: a default plugin
+        # (``default_plugins``) the user removed after it installed stays removed. Its core-era
+        # toolset scope is still kept below (Feishu's feishu_doc / feishu_drive stay off where core
+        # had them off), so only the install and the "not installed" notice are skipped.
+        placed_by_default = _marked(config, _DEFAULT_INSTALLED_KEY, feature)
         if not _predates_split(home, feature):
-            _say_post_split(home, feature, say=say, backoff=backoff, process_env=process_env)
+            if not placed_by_default:
+                _say_post_split(home, feature, say=say, backoff=backoff, process_env=process_env)
             continue
         present = plugin_present(feature.plugin, home)
         try:
@@ -1185,7 +1194,7 @@ def _pending(home: Path, *, say: Callable[[str], None], process_env: bool = Fals
                 f"toolset selection could not be kept ({exc}). Check `hermes tools`"
                 + ("." if present else f" and run `{_install_command(feature.plugin, home)}`."))
             continue
-        if present:
+        if present or placed_by_default:
             continue
         if backoff and _failed_recently(home, feature.plugin):
             logger.info("%s plugin install failed recently for %s; retrying later or on `hermes update`",
